@@ -72,7 +72,7 @@ parameters and train in a couple of minutes on CPU.
 | M0 | Single-process baseline | done |
 | M1 | Distributed hello-world | done |
 | M2 | Naive DDP (per-parameter all-reduce) | done |
-| M3 | GPU port + scaling efficiency baseline | |
+| M3 | GPU port + scaling efficiency baseline | code ready, benchmark pending |
 | M4 | Gradient bucketing | |
 | M5 | Compute/comm overlap | |
 | M6 | Deterministic checkpoint/resume | |
@@ -210,6 +210,54 @@ Summary: Wrote data-parallel training from scratch: broadcast weights from rank 
 Correctness: 2 ranks × batch 32 produced identical loss to four decimals against 1 rank × batch 64, at every logged step. Your DDP is mathematically exact.
 
 Throughput: 68k → 22k tok/s. Slower with more processes. Three causes — CPU contention (a local-testing artifact), ~30 separate all-reduce calls per step where latency dominates, and communication running only after backward finishes while compute sits idle.
+
+## M3 - GPU port (code complete, benchmark pending)
+
+Everything needed to run on real hardware, verified on CPU. Benchmark numbers
+are deferred to a single multi-GPU session after M5, so that naive, bucketed,
+and overlapped configurations are all measured on identical hardware in one
+sitting.
+
+### Changes
+
+**Device selection.** Each rank reads `LOCAL_RANK` and calls
+`torch.cuda.set_device(local_rank)`, then places tensors on `cuda:{local_rank}`.
+Without this every rank defaults to `cuda:0` - four times the memory on one
+device, three idle, and usually no error, just wrong and slow.
+
+**Backend selection.** `nccl` when CUDA is present, `gloo` otherwise. NCCL uses
+the GPU interconnect and ring algorithms tuned for GPU topology; gloo on GPU is
+supported but slow.
+
+**bf16 autocast.** `--dtype bf16` wraps forward and loss only. `backward()` and
+`opt.step()` stay outside the context - autocast records which ops ran in
+reduced precision during forward and handles the backward pass itself. Added
+before benchmarking rather than after, because mixed precision changes the
+compute-to-communication ratio that M4 and M5 optimize.
+
+**Model guards.** `d_model % n_head` and `seq_len` vs positional embedding size
+are validated with explicit errors, so a bad config fails at construction
+instead of deep inside an attention reshape.
+
+**Per-interval throughput.** Reported throughput is now tokens-since-last-log
+over time-since-last-log, alongside the cumulative average. The cumulative
+number smooths over exactly the variation these milestones are meant to move:
+
+| | range across a 200-step run |
+|---|---|
+| cumulative | 68k - 70k tok/s |
+| per-interval | 61k - 74k tok/s |
+
+The spread is real per-window variance that the running average was hiding.
+
+### Planned measurement
+
+Weak scaling - fixed per-rank batch, increasing rank count:
+
+    scaling efficiency = throughput(N) / (N x throughput(1))
+
+Measured at 1, 2, and 4 ranks for each of the naive (M2), bucketed (M4), and
+overlapped (M5) gradient synchronization paths.
 
 ## Setup
 
