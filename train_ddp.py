@@ -11,11 +11,13 @@ from minirt.utils import JsonlLogger, set_seed, sync
 
 
 def main():
-    dist.init_process_group(backend="gloo")
-
-    rank = int(os.environ["RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
+    rank = int(os.environ.get("RANK", "0"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     is_main = rank == 0
+
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend)
 
     p = argparse.ArgumentParser()
     p.add_argument("--steps", type=int, default=200)
@@ -35,7 +37,11 @@ def main():
     args = p.parse_args()
 
     set_seed(args.seed)
-    dev = args.device
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        dev = f"cuda:{local_rank}"
+    else:
+        dev = args.device
 
     tokens = make_corpus(args.vocab_size, args.corpus_tokens, args.seed)
     batcher = Batcher(tokens, args.batch_size, args.seq_len, args.seed, rank=rank, world_size=world_size)

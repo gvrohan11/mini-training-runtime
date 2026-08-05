@@ -23,7 +23,7 @@ def main():
     args = p.parse_args()
 
     set_seed(args.seed)
-    dev = args.device
+    dev = "cuda" if torch.cuda.is_available() else args.device
 
     tokens = make_corpus(args.vocab_size, args.corpus_tokens, args.seed)
     batcher = Batcher(tokens, args.batch_size, args.seq_len, args.seed)
