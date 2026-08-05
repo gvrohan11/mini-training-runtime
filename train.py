@@ -19,6 +19,7 @@ def main():
     p.add_argument("--corpus-tokens", type=int, default=200_000)
     p.add_argument("--warmup-steps", type=int, default=10)
     p.add_argument("--log-every", type=int, default=10)
+    p.add_argument("--dtype", default="fp32", choices=["fp32", "bf16"])
     p.add_argument("--run-name", default="baseline")
     args = p.parse_args()
 
@@ -44,7 +45,11 @@ def main():
             t0, timed_tokens = now, 0
             last_t, last_tokens = now, 0
 
-        _, loss = model(x, y)
+        if args.dtype == "bf16" and dev.startswith("cuda"):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                _, loss = model(x, y)
+        else:
+            _, loss = model(x, y)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()

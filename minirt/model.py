@@ -38,6 +38,8 @@ class Block(nn.Module):
 class TinyGPT(nn.Module):
     def __init__(self, vocab_size, seq_len, d_model=128, n_head=4, n_layer=4):
         super().__init__()
+        if d_model % n_head != 0:
+            raise ValueError(f"d_model ({d_model}) must be divisible by n_head ({n_head})")
         self.tok_emb = nn.Embedding(vocab_size, d_model)
         self.pos_emb = nn.Embedding(seq_len, d_model)
         self.blocks = nn.ModuleList([Block(d_model, n_head) for _ in range(n_layer)])
@@ -46,6 +48,8 @@ class TinyGPT(nn.Module):
     
     def forward(self, idx, targets=None):
         T = idx.shape[1]
+        if T > self.pos_emb.num_embeddings:
+            raise ValueError(f"seq_len {T} exceeds pos_emb size {self.pos_emb.num_embeddings}")
         x = self.tok_emb(idx) + self.pos_emb(torch.arange(T, device=idx.device))
         for blk in self.blocks:
             x = blk(x)
