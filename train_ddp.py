@@ -48,6 +48,7 @@ def main():
     log = JsonlLogger(f"runs/{args.run_name}.jsonl") if is_main else None
 
     t0, timed_tokens = None, 0
+    last_t, last_tokens = None, 0
     try:
         for step in range(1, args.steps + 1):
             x, y = batcher.next_batch()
@@ -56,7 +57,9 @@ def main():
 
             if step == args.warmup_steps + 1:
                 sync(dev)
-                t0, timed_tokens = time.perf_counter(), 0
+                now = time.perf_counter()
+                t0, timed_tokens = now, 0
+                last_t, last_tokens = now, 0
 
             _, loss = model(x, y)
             opt.zero_grad(set_to_none=True)
@@ -72,15 +75,20 @@ def main():
 
             if step % args.log_every == 0:
                 sync(dev)
-                tps = timed_tokens / (time.perf_counter() - t0) if t0 is not None else float("nan")
                 loss_value = loss.detach().clone()
                 dist.all_reduce(loss_value)
                 loss_value = loss_value / world_size
 
+                now = time.perf_counter()
+                interval_tps = (timed_tokens - last_tokens) / (now - last_t) if last_t is not None and now > last_t else float("nan")
+                cumulative_tps = timed_tokens / (now - t0) if t0 is not None and now > t0 else float("nan")
+
                 if is_main:
-                    print(f"step {step:4d} | loss {loss_value.item():.4f} | {tps:8.0f} tok/s")
-                    log.log(step=step, loss=loss_value.item(), tokens_per_sec=tps,
-                            world_size=world_size, run=args.run_name)
+                    print(f"step {step:4d} | loss {loss_value.item():.4f} | interval {interval_tps:8.0f} tok/s | cumulative {cumulative_tps:8.0f} tok/s")
+                    log.log(step=step, loss=loss_value.item(), interval_tps=interval_tps,
+                            cumulative_tps=cumulative_tps, world_size=world_size, run=args.run_name)
+
+                last_t, last_tokens = now, timed_tokens
 
         sync(dev)
         if is_main:
