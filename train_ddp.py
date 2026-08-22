@@ -5,6 +5,7 @@ import time
 import torch
 import torch.distributed as dist
 
+from minirt.bucket import GradientBucketer
 from minirt.data import Batcher, make_corpus
 from minirt.model import TinyGPT
 from minirt.utils import JsonlLogger, set_seed, sync
@@ -34,6 +35,7 @@ def main():
     p.add_argument("--warmup-steps", type=int, default=10)
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--dtype", default="fp32", choices=["fp32", "bf16"])
+    p.add_argument("--bucket-mb", type=int, default=25)
     p.add_argument("--run-name", default="baseline")
     args = p.parse_args()
 
@@ -52,6 +54,7 @@ def main():
         dist.broadcast(param.data, src=0)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    bucketer = GradientBucketer(model.parameters(), bucket_mb=args.bucket_mb)
     log = JsonlLogger(f"runs/{args.run_name}.jsonl") if is_main else None
 
     t0, timed_tokens = None, 0
@@ -75,12 +78,7 @@ def main():
                 _, loss = model(x, y)
             opt.zero_grad(set_to_none=True)
             loss.backward()
-
-            for param in model.parameters():
-                if param.grad is not None:
-                    dist.all_reduce(param.grad)
-                    param.grad /= world_size
-
+            bucketer.sync(world_size)
             opt.step()
             timed_tokens += x.numel()
 

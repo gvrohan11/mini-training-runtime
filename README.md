@@ -73,7 +73,7 @@ parameters and train in a couple of minutes on CPU.
 | M1 | Distributed hello-world | done |
 | M2 | Naive DDP (per-parameter all-reduce) | done |
 | M3 | GPU port + scaling efficiency baseline | code ready, benchmark pending |
-| M4 | Gradient bucketing | |
+| M4 | Gradient bucketing | done |
 | M5 | Compute/comm overlap | |
 | M6 | Deterministic checkpoint/resume | |
 | M7 | Profiling pass + benchmark table | |
@@ -258,6 +258,58 @@ Weak scaling - fixed per-rank batch, increasing rank count:
 
 Measured at 1, 2, and 4 ranks for each of the naive (M2), bucketed (M4), and
 overlapped (M5) gradient synchronization paths.
+
+## M4 - Gradient bucketing
+
+M2 issued one `all_reduce` per parameter tensor - roughly 50 collectives per
+step. Each collective carries fixed overhead independent of payload size:
+launch cost, cross-rank synchronization, protocol handshake. For a tensor
+holding a few thousand floats, that overhead exceeds the cost of moving the
+bytes. The work is **latency-bound**, not bandwidth-bound.
+
+Bucketing trades many small collectives for few large ones. Parameters are
+partitioned into ~25MB groups at startup; each step flattens a bucket's
+gradients into one contiguous buffer, all-reduces the buffer once, divides by
+world size, and copies the results back into the individual `.grad` tensors.
+
+Buckets are assembled in **reverse parameter order**. This is irrelevant here -
+M4 synchronizes after `backward()` has fully completed - but backward produces
+gradients last-layer-first, so reverse ordering is what allows M5 to fire a
+bucket's collective as soon as that bucket is ready.
+
+Partitioning is computed at construction, before any gradient exists, since it
+depends only on parameter shape and dtype. M5 requires bucket membership to be
+known in advance so hooks can test readiness.
+
+### Correctness
+
+    python train.py --steps 200 --batch-size 64                # 1 rank  x 64
+    ./run_dist.sh 2 train_ddp.py --steps 200 --batch-size 32   # 2 ranks x 32
+
+Identical to four decimals at every logged step, matching M2 and the
+single-process baseline. Flattening changes the order of floating-point
+summation, so exact agreement is not guaranteed in general - it holds at this
+model size.
+
+### Throughput
+
+| Config | Collectives/step | Throughput |
+|---|---|---|
+| M2, per-parameter | ~50 | ~21.6k tok/s |
+| M4, 25MB buckets | 1 | ~23.6k tok/s |
+
+About 9%. Smaller than the 50x reduction in collective count suggests, and the
+reason is the measurement environment rather than the optimization: gloo over
+loopback has low per-call latency - no network, no PCIe, just memory copies
+between processes on one machine - so the overhead being eliminated is small in
+absolute terms. The dominant cost here is two Python processes at
+`OMP_NUM_THREADS=1` contending for one laptop's cores during forward and
+backward, which bucketing does not address.
+
+The optimization targets a cost this environment barely has. The meaningful
+measurement is multi-GPU with NCCL, where per-collective overhead is
+substantially higher relative to compute, and is deferred to the M3 benchmark
+session.
 
 ## Setup
 
