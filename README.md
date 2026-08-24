@@ -458,6 +458,7 @@ every logged step:
 
 The comparison is recursive over nested structures, since
 `optimizer.state_dict()` mixes dicts, lists, tensors, and scalars.
+Distributed resume was also verified at `world_size=2` with matching losses.
 
 ### Note on the warmup window
 
