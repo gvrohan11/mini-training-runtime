@@ -75,7 +75,7 @@ parameters and train in a couple of minutes on CPU.
 | M3 | GPU port + scaling efficiency baseline | code ready, benchmark pending |
 | M4 | Gradient bucketing | done |
 | M5 | Compute/comm overlap | mechanism done, benefit pending GPU |
-| M6 | Deterministic checkpoint/resume | |
+| M6 | Deterministic checkpoint/resume | done |
 | M7 | Profiling pass + benchmark table | |
 
 
@@ -397,6 +397,80 @@ the curve actually peaks.
 - Flat buffers are allocated per bucket per step. Production DDP preallocates
   once at construction and reuses.
 - No gradient accumulation support - every backward triggers a sync.
+
+## M6 - Deterministic checkpoint/resume
+
+The bar is not "training continues after a restart." It is: **a run that is
+interrupted and resumed produces bit-identical results to a run that was never
+interrupted.** Same weights, same optimizer moments, same loss at every step.
+
+"Close enough" is easy and proves nothing. Bit-exactness is what forces every
+piece of nondeterministic state to be captured - any divergence is proof that
+something was dropped.
+
+### What is saved
+
+| Component | Why it matters if lost |
+|---|---|
+| model `state_dict` | the obvious one |
+| optimizer `state_dict` | AdamW's per-parameter first and second moments; without them the first steps after resume are effectively unconditioned |
+| RNG states (torch, numpy, python, cuda) | anything stochastic - dropout, shuffling, augmentation - diverges immediately |
+| batcher position | determines which samples come next; without it, data is re-shown or skipped |
+| step counter | schedule position |
+
+The batcher is the piece that usually blocks this. Most dataloaders have no
+notion of position and cannot resume mid-epoch without re-shuffling. This one
+stores a single integer: the permutation is derived purely from `seed`, so
+`(seed, pos)` fully determines the stream. That was a deliberate M0 decision
+made for this milestone.
+
+### Atomic writes
+
+Checkpoints are written to `path.tmp` and then moved with `os.replace`, which
+is atomic on POSIX. A crash during the write leaves the previous checkpoint
+intact rather than a truncated file - which matters, since crashing is the
+exact scenario this feature exists to survive.
+
+### Verification
+
+`verify_resume.py` runs the comparison end-to-end:
+
+1. Reference run, 100 steps uninterrupted, final checkpoint saved.
+2. Partial run, 50 steps, checkpoint saved.
+3. Resumed run, loads that checkpoint, trains to step 100, final checkpoint saved.
+4. Every tensor in both the model and optimizer state dicts compared with
+   `torch.equal`.
+
+    $ python verify_resume.py
+    ...
+    PASS
+
+Model weights **and** optimizer state are bitwise identical. Losses match at
+every logged step:
+
+| Step | Uninterrupted | Killed at 50, resumed |
+|---|---|---|
+| 60 | 5.3342 | 5.3342 |
+| 70 | 5.2946 | 5.2946 |
+| 80 | 5.2335 | 5.2335 |
+| 90 | 5.1913 | 5.1913 |
+| 100 | 5.1311 | 5.1311 |
+
+The comparison is recursive over nested structures, since
+`optimizer.state_dict()` mixes dicts, lists, tensors, and scalars.
+
+### Note on the warmup window
+
+Throughput timing originally triggered at a fixed step index, which never fired
+on a resumed run starting past that point. The trigger is now relative to
+`resume_step`, so a resumed run measures its own warmup window.
+
+### Known gaps
+
+- Checkpoints are written by rank 0 only, as a single file. Sharded checkpoint
+  writing across ranks is not implemented.
+- Saving is synchronous - training blocks until the write completes.
+- No retention policy; each run keeps one checkpoint, overwritten in place.
 
 ## Setup
 

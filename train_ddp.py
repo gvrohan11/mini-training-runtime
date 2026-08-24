@@ -6,14 +6,20 @@ import torch
 import torch.distributed as dist
 
 from minirt.bucket import GradientBucketer
+from minirt.checkpoint import load, save
 from minirt.data import Batcher, make_corpus
 from minirt.model import TinyGPT
 from minirt.utils import JsonlLogger, set_seed, sync
 
 
 def main():
-    rank = int(os.environ.get("RANK", "0"))
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29501")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     is_main = rank == 0
 
@@ -36,6 +42,9 @@ def main():
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--dtype", default="fp32", choices=["fp32", "bf16"])
     p.add_argument("--bucket-mb", type=int, default=25)
+    p.add_argument("--checkpoint-every", type=int, default=0)
+    p.add_argument("--checkpoint-dir", default="runs")
+    p.add_argument("--resume", default=None)
     p.add_argument("--run-name", default="baseline")
     args = p.parse_args()
 
@@ -58,15 +67,21 @@ def main():
     bucketer.register_hooks()
     log = JsonlLogger(f"runs/{args.run_name}.jsonl") if is_main else None
 
+    resume_step = 0
+    if args.resume is not None:
+        resume_step = load(args.resume, model, opt, batcher)
+        if is_main:
+            print(f"resumed from step {resume_step} using {args.resume}")
+
     t0, timed_tokens = None, 0
     last_t, last_tokens = None, 0
     try:
-        for step in range(1, args.steps + 1):
+        for step in range(resume_step + 1, args.steps + 1):
             x, y = batcher.next_batch()
             x = x.to(dev)
             y = y.to(dev)
 
-            if step == args.warmup_steps + 1:
+            if step == resume_step + args.warmup_steps + 1:
                 sync(dev)
                 now = time.perf_counter()
                 t0, timed_tokens = now, 0
@@ -100,10 +115,18 @@ def main():
 
                 last_t, last_tokens = now, timed_tokens
 
+            if args.checkpoint_every and step % args.checkpoint_every == 0:
+                if is_main:
+                    ckpt_path = os.path.join(args.checkpoint_dir, f"{args.run_name}.ckpt")
+                    save(ckpt_path, model, opt, batcher, step, args)
+
         sync(dev)
         if is_main:
             total = timed_tokens / (time.perf_counter() - t0) if t0 is not None else float("nan")
             print(f"\nfinal: {total:.0f} tok/s over {args.steps - args.warmup_steps} steps")
+            if args.checkpoint_every:
+                ckpt_path = os.path.join(args.checkpoint_dir, f"{args.run_name}.ckpt")
+                save(ckpt_path, model, opt, batcher, args.steps, args)
     finally:
         dist.destroy_process_group()
 
