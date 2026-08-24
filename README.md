@@ -74,7 +74,7 @@ parameters and train in a couple of minutes on CPU.
 | M2 | Naive DDP (per-parameter all-reduce) | done |
 | M3 | GPU port + scaling efficiency baseline | code ready, benchmark pending |
 | M4 | Gradient bucketing | done |
-| M5 | Compute/comm overlap | |
+| M5 | Compute/comm overlap | mechanism done, benefit pending GPU |
 | M6 | Deterministic checkpoint/resume | |
 | M7 | Profiling pass + benchmark table | |
 
@@ -310,6 +310,93 @@ The optimization targets a cost this environment barely has. The meaningful
 measurement is multi-GPU with NCCL, where per-collective overhead is
 substantially higher relative to compute, and is deferred to the M3 benchmark
 session.
+
+## M5 - Compute/communication overlap
+
+M4 still serializes the step: backward runs to completion, then communication
+starts. During the all-reduce the compute units idle; during backward the
+interconnect idles.
+
+    [============ backward ============][== all_reduce ==][step]
+
+But the last layer's gradient is ready long before the first layer's. Firing
+each bucket's collective the moment that bucket is complete lets communication
+run underneath the remaining backward pass:
+
+    [============ backward ============][wait][step]
+           [== b3 ==][== b2 ==][== b1 ==]
+
+Communication time does not shrink. It hides.
+
+### Mechanism
+
+**Readiness tracking.** Each parameter gets a
+`register_post_accumulate_grad_hook` that decrements its bucket's pending
+count. Counting rather than assuming an order matters: hooks fire in backward
+order, which is close to reverse parameter order but not guaranteed to match
+it.
+
+**Async dispatch.** When a bucket's count reaches zero, its gradients are
+flattened and passed to `dist.all_reduce(..., async_op=True)`, which returns a
+`Work` handle immediately. Backward continues while the collective proceeds.
+
+**Deferred synchronization.** Before `opt.step()`, every outstanding handle is
+waited on, then each buffer is divided by world size, unflattened, and copied
+back into `.grad`. The optimizer must never read a gradient still in flight.
+
+State resets at the end of every step - pending counts restored, handle list
+cleared - or step 2 would see every bucket already "ready" and fire nothing.
+
+Bucket ordering must be identical across ranks. Collectives are matched by call
+order, not by identity, so ranks reducing buckets in different orders deadlock
+rather than error. Deterministic partitioning from M4 is what guarantees this.
+
+### Correctness
+
+Losses identical to four decimals against the single-process baseline at every
+logged step, at both bucket sizes tested.
+
+### Throughput, and why it doesn't improve here
+
+| Config | Throughput |
+|---|---|
+| M2, per-parameter all-reduce | ~21.6k tok/s |
+| M4, 25MB buckets, no overlap | ~23.6k tok/s |
+| M5, 25MB buckets, overlapped | ~23.9k tok/s |
+| M5, 1MB buckets, overlapped | ~21.3k tok/s |
+
+Two results, both expected on this hardware.
+
+**At 25MB the overlap has nothing to hide behind.** TinyGPT's gradients total
+~6MB, so the entire model is one bucket, and a single bucket cannot fire until
+its last gradient arrives - which is when backward ends. The mechanism is
+correct and has no opportunity to act.
+
+**At 1MB, more buckets made it slower, not faster.** Two effects compound.
+More buckets means more collectives, which reintroduces the per-call latency
+M4 removed. And gloo's `async_op` on CPU does not provide true background
+progress: there is no copy engine, so a collective advances only while the
+process is executing inside gloo. "Overlap" degrades into interleaved work
+competing for the same cores as backward. The per-interval throughput bears
+this out, decaying from ~24k to ~10k over the run rather than holding steady.
+
+This is the bucket-size tension made concrete: **larger buckets amortize
+latency but eliminate overlap; smaller buckets enable overlap but multiply
+latency.** On CPU with gloo the latency term dominates so completely that
+overlap cannot win at any size. The technique is a GPU optimization -
+NCCL collectives run on dedicated copy engines and make real progress
+concurrently with SM compute. That asymmetry is not observable on this
+hardware.
+
+The M3 benchmark session therefore has a question attached, not just numbers to
+collect: sweep `--bucket-mb` across 1 / 5 / 25 / 100 under NCCL and locate where
+the curve actually peaks.
+
+### Known gaps
+
+- Flat buffers are allocated per bucket per step. Production DDP preallocates
+  once at construction and reuses.
+- No gradient accumulation support - every backward triggers a sync.
 
 ## Setup
 

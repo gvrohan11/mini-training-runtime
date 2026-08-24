@@ -7,6 +7,8 @@ class GradientBucketer:
         self.bucket_bytes = int(bucket_mb * 1024 * 1024)
         self.params = list(params)
         self.buckets = self._build_buckets()
+        self.pending = [len(bucket) for bucket in self.buckets]
+        self.inflight = []
 
     def _build_buckets(self):
         buckets = []
@@ -26,6 +28,38 @@ class GradientBucketer:
             buckets.append(cur)
 
         return buckets
+
+    def register_hooks(self):
+        for bucket_idx, bucket in enumerate(self.buckets):
+            for p in bucket:
+                p.register_post_accumulate_grad_hook(
+                    lambda param, _idx=bucket_idx: self._mark_bucket_ready(_idx)
+                )
+
+    def _mark_bucket_ready(self, bucket_idx):
+        self.pending[bucket_idx] -= 1
+        if self.pending[bucket_idx] != 0:
+            return
+
+        bucket = self.buckets[bucket_idx]
+        grads = [p.grad for p in bucket]
+
+        flat = torch._utils._flatten_dense_tensors(grads)
+        handle = dist.all_reduce(flat, async_op=True)
+        self.inflight.append((handle, flat, grads))
+
+    def wait_and_copy(self, world_size):
+        for handle, flat, grads in self.inflight:
+            handle.wait()
+
+        for handle, flat, grads in self.inflight:
+            flat.div_(world_size)
+            unflat = torch._utils._unflatten_dense_tensors(flat, grads)
+            for g, u in zip(grads, unflat):
+                g.copy_(u)
+
+        self.inflight.clear()
+        self.pending = [len(bucket) for bucket in self.buckets]
 
     def sync(self, world_size):
         for bucket in self.buckets:

@@ -55,6 +55,7 @@ def main():
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     bucketer = GradientBucketer(model.parameters(), bucket_mb=args.bucket_mb)
+    bucketer.register_hooks()
     log = JsonlLogger(f"runs/{args.run_name}.jsonl") if is_main else None
 
     t0, timed_tokens = None, 0
@@ -78,7 +79,7 @@ def main():
                 _, loss = model(x, y)
             opt.zero_grad(set_to_none=True)
             loss.backward()
-            bucketer.sync(world_size)
+            bucketer.wait_and_copy(world_size)
             opt.step()
             timed_tokens += x.numel()
 
