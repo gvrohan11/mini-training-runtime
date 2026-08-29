@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import os
 import time
 
@@ -45,6 +46,8 @@ def main():
     p.add_argument("--checkpoint-every", type=int, default=0)
     p.add_argument("--checkpoint-dir", default="runs")
     p.add_argument("--resume", default=None)
+    p.add_argument("--profile", action="store_true")
+    p.add_argument("--profile-steps", type=int, default=20)
     p.add_argument("--run-name", default="baseline")
     args = p.parse_args()
 
@@ -73,60 +76,79 @@ def main():
         if is_main:
             print(f"resumed from step {resume_step} using {args.resume}")
 
+    profiler = None
+    if args.profile and is_main:
+        profiler = torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(wait=1, warmup=2, active=args.profile_steps, repeat=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(f"runs/trace_{args.run_name}"),
+            record_shapes=True,
+            with_stack=True,
+        )
+
+    prof_ctx = profiler if profiler is not None else contextlib.nullcontext()
+
     t0, timed_tokens = None, 0
     last_t, last_tokens = None, 0
     try:
-        for step in range(resume_step + 1, args.steps + 1):
-            x, y = batcher.next_batch()
-            x = x.to(dev)
-            y = y.to(dev)
+        with prof_ctx:
+            for step in range(resume_step + 1, args.steps + 1):
+                x, y = batcher.next_batch()
+                x = x.to(dev)
+                y = y.to(dev)
 
-            if step == resume_step + args.warmup_steps + 1:
-                sync(dev)
-                now = time.perf_counter()
-                t0, timed_tokens = now, 0
-                last_t, last_tokens = now, 0
+                if step == resume_step + args.warmup_steps + 1:
+                    sync(dev)
+                    now = time.perf_counter()
+                    t0, timed_tokens = now, 0
+                    last_t, last_tokens = now, 0
 
-            if args.dtype == "bf16" and dev.startswith("cuda"):
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                if args.dtype == "bf16" and dev.startswith("cuda"):
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        _, loss = model(x, y)
+                else:
                     _, loss = model(x, y)
-            else:
-                _, loss = model(x, y)
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            bucketer.wait_and_copy(world_size)
-            opt.step()
-            timed_tokens += x.numel()
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                bucketer.wait_and_copy(world_size)
+                opt.step()
+                timed_tokens += x.numel()
 
-            if step % args.log_every == 0:
-                sync(dev)
-                loss_value = loss.detach().clone()
-                dist.all_reduce(loss_value)
-                loss_value = loss_value / world_size
+                if step % args.log_every == 0:
+                    sync(dev)
+                    loss_value = loss.detach().clone()
+                    dist.all_reduce(loss_value)
+                    loss_value = loss_value / world_size
 
-                now = time.perf_counter()
-                interval_tps = (timed_tokens - last_tokens) / (now - last_t) if last_t is not None and now > last_t else float("nan")
-                cumulative_tps = timed_tokens / (now - t0) if t0 is not None and now > t0 else float("nan")
+                    now = time.perf_counter()
+                    interval_tps = (timed_tokens - last_tokens) / (now - last_t) if last_t is not None and now > last_t else float("nan")
+                    cumulative_tps = timed_tokens / (now - t0) if t0 is not None and now > t0 else float("nan")
 
-                if is_main:
-                    print(f"step {step:4d} | loss {loss_value.item():.4f} | interval {interval_tps:8.0f} tok/s | cumulative {cumulative_tps:8.0f} tok/s")
-                    log.log(step=step, loss=loss_value.item(), interval_tps=interval_tps,
-                            cumulative_tps=cumulative_tps, world_size=world_size, run=args.run_name)
+                    if is_main:
+                        print(f"step {step:4d} | loss {loss_value.item():.4f} | interval {interval_tps:8.0f} tok/s | cumulative {cumulative_tps:8.0f} tok/s")
+                        log.log(step=step, loss=loss_value.item(), interval_tps=interval_tps,
+                                cumulative_tps=cumulative_tps, world_size=world_size, run=args.run_name)
 
-                last_t, last_tokens = now, timed_tokens
+                    last_t, last_tokens = now, timed_tokens
 
-            if args.checkpoint_every and step % args.checkpoint_every == 0:
-                if is_main:
+                if args.checkpoint_every and step % args.checkpoint_every == 0:
+                    if is_main:
+                        ckpt_path = os.path.join(args.checkpoint_dir, f"{args.run_name}.ckpt")
+                        save(ckpt_path, model, opt, batcher, step, args)
+
+                if profiler is not None:
+                    profiler.step()
+
+            sync(dev)
+            if is_main:
+                total = timed_tokens / (time.perf_counter() - t0) if t0 is not None else float("nan")
+                print(f"\nfinal: {total:.0f} tok/s over {args.steps - args.warmup_steps} steps")
+                if args.checkpoint_every:
                     ckpt_path = os.path.join(args.checkpoint_dir, f"{args.run_name}.ckpt")
-                    save(ckpt_path, model, opt, batcher, step, args)
-
-        sync(dev)
-        if is_main:
-            total = timed_tokens / (time.perf_counter() - t0) if t0 is not None else float("nan")
-            print(f"\nfinal: {total:.0f} tok/s over {args.steps - args.warmup_steps} steps")
-            if args.checkpoint_every:
-                ckpt_path = os.path.join(args.checkpoint_dir, f"{args.run_name}.ckpt")
-                save(ckpt_path, model, opt, batcher, args.steps, args)
+                    save(ckpt_path, model, opt, batcher, args.steps, args)
     finally:
         dist.destroy_process_group()
 
