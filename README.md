@@ -72,11 +72,11 @@ parameters and train in a couple of minutes on CPU.
 | M0 | Single-process baseline | done |
 | M1 | Distributed hello-world | done |
 | M2 | Naive DDP (per-parameter all-reduce) | done |
-| M3 | GPU port + scaling efficiency baseline | code ready, benchmark pending |
+| M3 | GPU port + scaling efficiency baseline | done |
 | M4 | Gradient bucketing | done |
-| M5 | Compute/comm overlap | mechanism done, benefit pending GPU |
+| M5 | Compute/comm overlap | done |
 | M6 | Deterministic checkpoint/resume | done |
-| M7 | Profiling pass + benchmark table | |
+| M7 | Profiling pass + benchmark table | done |
 
 
 ## M0 - Single-process baseline
@@ -211,53 +211,47 @@ Correctness: 2 ranks × batch 32 produced identical loss to four decimals agains
 
 Throughput: 68k → 22k tok/s. Slower with more processes. Three causes — CPU contention (a local-testing artifact), ~30 separate all-reduce calls per step where latency dominates, and communication running only after backward finishes while compute sits idle.
 
-## M3 - GPU port (code complete, benchmark pending)
+## M3 - GPU scaling
 
-Everything needed to run on real hardware, verified on CPU. Benchmark numbers
-are deferred to a single multi-GPU session after M5, so that naive, bucketed,
-and overlapped configurations are all measured on identical hardware in one
-sitting.
+Benchmarked on 4x H100 80GB SXM5 (Lambda Cloud), PyTorch 2.7, NCCL backend.
+Model: 12-layer transformer, d_model 768, 12 heads, seq_len 512, vocab 512
+(~86M parameters). bf16 autocast, 300 steps, 290 timed after warmup.
 
-### Changes
+Weak scaling - per-rank batch held at 32, rank count varied:
 
-**Device selection.** Each rank reads `LOCAL_RANK` and calls
-`torch.cuda.set_device(local_rank)`, then places tensors on `cuda:{local_rank}`.
-Without this every rank defaults to `cuda:0` - four times the memory on one
-device, three idle, and usually no error, just wrong and slow.
+| Ranks | Global batch | Throughput | Scaling efficiency |
+|---|---|---|---|
+| 1 | 32 | 445k tok/s | 1.000 |
+| 2 | 64 | 861k tok/s | 0.968 |
+| 4 | 128 | 1,715k tok/s | **0.963** |
 
-**Backend selection.** `nccl` when CUDA is present, `gloo` otherwise. NCCL uses
-the GPU interconnect and ring algorithms tuned for GPU topology; gloo on GPU is
-supported but slow.
+96% of linear at 4 GPUs.
 
-**bf16 autocast.** `--dtype bf16` wraps forward and loss only. `backward()` and
-`opt.step()` stay outside the context - autocast records which ops ran in
-reduced precision during forward and handles the backward pass itself. Added
-before benchmarking rather than after, because mixed precision changes the
-compute-to-communication ratio that M4 and M5 optimize.
+Throughput is reported globally: rank 0 measures its own tokens/sec and
+multiplies by world size. This assumes ranks progress at equal rates, which
+collectives enforce approximately but which does hide stragglers by
+construction.
 
-**Model guards.** `d_model % n_head` and `seq_len` vs positional embedding size
-are validated with explicit errors, so a bad config fails at construction
-instead of deep inside an attention reshape.
+At per-rank batch 64, 4 ranks reach **1,941k tok/s** - 13% above batch 32,
+since larger batches amortize per-step overhead better on hardware this fast.
 
-**Per-interval throughput.** Reported throughput is now tokens-since-last-log
-over time-since-last-log, alongside the cumulative average. The cumulative
-number smooths over exactly the variation these milestones are meant to move:
+### Precision
 
-| | range across a 200-step run |
+| Config (4 ranks) | Throughput |
 |---|---|
-| cumulative | 68k - 70k tok/s |
-| per-interval | 61k - 74k tok/s |
+| bf16 | 1,715k tok/s |
+| fp32 | 313k tok/s |
 
-The spread is real per-window variance that the running average was hiding.
+5.5x. Larger than the 2x that halved bytes alone would suggest: bf16 matmuls
+dispatch to tensor cores, while fp32 without TF32 enabled runs on the general
+FP32 path.
 
-### Planned measurement
+### MFU
 
-Weak scaling - fixed per-rank batch, increasing rank count:
-
-    scaling efficiency = throughput(N) / (N x throughput(1))
-
-Measured at 1, 2, and 4 ranks for each of the naive (M2), bucketed (M4), and
-overlapped (M5) gradient synchronization paths.
+At ~86M parameters and roughly 6N FLOPs per token, 1,941k tok/s corresponds to
+approximately 1.1 PFLOP/s across four GPUs, or ~28% of the 989 TFLOP/s dense
+bf16 peak per H100. Reasonable for a model this small; MFU improves with model
+size as matmuls grow relative to fixed per-step costs.
 
 ## M4 - Gradient bucketing
 
@@ -472,6 +466,65 @@ on a resumed run starting past that point. The trigger is now relative to
   writing across ranks is not implemented.
 - Saving is synchronous - training blocks until the write completes.
 - No retention policy; each run keeps one checkpoint, overwritten in place.
+
+## M7 - Profiling
+
+`--profile` wraps the training loop in `torch.profiler` with a
+`wait=1, warmup=2, active=N` schedule, so the trace excludes allocator warmup
+and cuDNN autotuning. Rank 0 only - profiling every rank multiplies overhead
+without adding information.
+
+### Overlap, confirmed in the trace
+
+![NCCL all-reduce overlapping backward compute](runs/overlap_timeline.png)
+
+Two CUDA streams, one training step (`ProfilerStep#5`, 4.209 ms total):
+
+- **stream 7** - compute. Backward kernels run continuously:
+  `flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel`, `nvjet_tst_*` matmuls,
+  `GammaBetaBackwardCUDAKernel`, `layer_norm_grad_input_kernel`.
+- **stream 19** - communication. `ncclDevKernel_AllReduce_Sum_f32_RING_LL`,
+  147.5 us per call.
+
+The all-reduce begins and completes *inside* the span of a single backward
+flash-attention kernel. The collective is not merely adjacent to compute - it
+is fully hidden by it. Across the step, nccl slices appear at several distinct
+points rather than clustered at the end, which is the per-bucket hook dispatch
+firing as each bucket completes.
+
+This is the direct evidence for M5. On CPU with gloo the mechanism was correct
+but unobservable; on NCCL it does what it was built to do.
+
+### Bucket size
+
+The question M5 left open, swept at 4 ranks:
+
+| Bucket size | Throughput |
+|---|---|
+| 1 MB | **1,751k tok/s** |
+| 5 MB | 1,742k tok/s |
+| 25 MB | 1,721k tok/s |
+| 100 MB | 1,723k tok/s |
+
+**Smaller buckets win here - the inverse of the CPU result.** On gloo,
+smaller buckets were slower: more collectives meant more per-call latency, and
+`async_op` gave no real background progress without a copy engine. On NCCL the
+collectives execute on a dedicated stream concurrently with compute, so more
+buckets means more overlap opportunity, and per-call overhead is low enough not
+to consume the gain.
+
+The spread is ~1.8%, small but consistent and well above run-to-run noise
+(~0.3%). The same knob points in opposite directions on the two backends, which
+is the point: bucket size trades latency amortization against overlap
+opportunity, and which term dominates is a property of the hardware, not the
+algorithm.
+
+### Observation from the trace
+
+Gradients are all-reduced in **fp32** (`AllReduce_Sum_f32`) even though the
+forward pass runs in bf16 - autocast keeps master weights and gradients in full
+precision. Communication therefore moves twice the bytes a bf16 reduction
+would. Reducing in bf16, or compressing gradients, is unexplored here.
 
 ## Setup
 
