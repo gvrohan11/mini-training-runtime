@@ -126,11 +126,13 @@ def main():
                     now = time.perf_counter()
                     interval_tps = (timed_tokens - last_tokens) / (now - last_t) if last_t is not None and now > last_t else float("nan")
                     cumulative_tps = timed_tokens / (now - t0) if t0 is not None and now > t0 else float("nan")
+                    global_interval_tps = interval_tps * world_size
+                    global_cumulative_tps = cumulative_tps * world_size
 
                     if is_main:
-                        print(f"step {step:4d} | loss {loss_value.item():.4f} | interval {interval_tps:8.0f} tok/s | cumulative {cumulative_tps:8.0f} tok/s")
-                        log.log(step=step, loss=loss_value.item(), interval_tps=interval_tps,
-                                cumulative_tps=cumulative_tps, world_size=world_size, run=args.run_name)
+                        print(f"step {step:4d} | loss {loss_value.item():.4f} | interval {global_interval_tps:8.0f} tok/s | cumulative {global_cumulative_tps:8.0f} tok/s")
+                        log.log(step=step, loss=loss_value.item(), interval_tps=global_interval_tps,
+                                cumulative_tps=global_cumulative_tps, world_size=world_size, run=args.run_name)
 
                     last_t, last_tokens = now, timed_tokens
 
@@ -145,7 +147,8 @@ def main():
             sync(dev)
             if is_main:
                 total = timed_tokens / (time.perf_counter() - t0) if t0 is not None else float("nan")
-                print(f"\nfinal: {total:.0f} tok/s over {args.steps - args.warmup_steps} steps")
+                global_total = total * world_size
+                print(f"\nfinal: {global_total:.0f} tok/s over {args.steps - args.warmup_steps} steps")
                 if args.checkpoint_every:
                     ckpt_path = os.path.join(args.checkpoint_dir, f"{args.run_name}.ckpt")
                     save(ckpt_path, model, opt, batcher, args.steps, args)
