@@ -1,0 +1,40 @@
+{"step": 10, "loss": 5.627041816711426, "tokens_per_sec": NaN, "world_size": 1, "run": "base64"}
+{"step": 20, "loss": 5.526797294616699, "tokens_per_sec": 65758.32452823497, "world_size": 1, "run": "base64"}
+{"step": 30, "loss": 5.461842060089111, "tokens_per_sec": 65113.58970318262, "world_size": 1, "run": "base64"}
+{"step": 40, "loss": 5.391870021820068, "tokens_per_sec": 66469.81148070363, "world_size": 1, "run": "base64"}
+{"step": 50, "loss": 5.328518390655518, "tokens_per_sec": 67742.46640098254, "world_size": 1, "run": "base64"}
+{"step": 60, "loss": 5.268876552581787, "tokens_per_sec": 66932.23679902515, "world_size": 1, "run": "base64"}
+{"step": 70, "loss": 5.2011027336120605, "tokens_per_sec": 67300.52364271395, "world_size": 1, "run": "base64"}
+{"step": 80, "loss": 5.139866828918457, "tokens_per_sec": 67758.0403960301, "world_size": 1, "run": "base64"}
+{"step": 90, "loss": 5.065634727478027, "tokens_per_sec": 67999.96748627844, "world_size": 1, "run": "base64"}
+{"step": 100, "loss": 5.043574810028076, "tokens_per_sec": 67818.58571066796, "world_size": 1, "run": "base64"}
+{"step": 110, "loss": 4.969690322875977, "tokens_per_sec": 67979.79077125949, "world_size": 1, "run": "base64"}
+{"step": 120, "loss": 4.909018039703369, "tokens_per_sec": 68347.81740256271, "world_size": 1, "run": "base64"}
+{"step": 130, "loss": 4.860901355743408, "tokens_per_sec": 68925.56777323484, "world_size": 1, "run": "base64"}
+{"step": 140, "loss": 4.816936492919922, "tokens_per_sec": 68800.50363154069, "world_size": 1, "run": "base64"}
+{"step": 150, "loss": 4.768024921417236, "tokens_per_sec": 68850.93395050165, "world_size": 1, "run": "base64"}
+{"step": 160, "loss": 4.730292320251465, "tokens_per_sec": 68003.05941830194, "world_size": 1, "run": "base64"}
+{"step": 170, "loss": 4.674787998199463, "tokens_per_sec": 67936.37220401347, "world_size": 1, "run": "base64"}
+{"step": 180, "loss": 4.647265911102295, "tokens_per_sec": 68086.58696263573, "world_size": 1, "run": "base64"}
+{"step": 190, "loss": 4.599915504455566, "tokens_per_sec": 68311.27588121807, "world_size": 1, "run": "base64"}
+{"step": 200, "loss": 4.564486980438232, "tokens_per_sec": 68444.6729732593, "world_size": 1, "run": "base64"}
+{"step": 10, "loss": 5.627041816711426, "interval_tps": NaN, "cumulative_tps": NaN, "world_size": 1, "run": "base64"}
+{"step": 20, "loss": 5.526797294616699, "interval_tps": 72853.63523988982, "cumulative_tps": 72853.63523988982, "world_size": 1, "run": "base64"}
+{"step": 30, "loss": 5.461842060089111, "interval_tps": 66944.97525308475, "cumulative_tps": 69774.43897379487, "world_size": 1, "run": "base64"}
+{"step": 40, "loss": 5.391870021820068, "interval_tps": 64912.530309546695, "cumulative_tps": 68074.85079806461, "world_size": 1, "run": "base64"}
+{"step": 50, "loss": 5.328518390655518, "interval_tps": 66030.94594209388, "cumulative_tps": 67552.10320674439, "world_size": 1, "run": "base64"}
+{"step": 60, "loss": 5.268876552581787, "interval_tps": 71701.6931222075, "cumulative_tps": 68343.14738670122, "world_size": 1, "run": "base64"}
+{"step": 70, "loss": 5.2011027336120605, "interval_tps": 67213.76080745892, "cumulative_tps": 68152.28795940206, "world_size": 1, "run": "base64"}
+{"step": 80, "loss": 5.139866828918457, "interval_tps": 67226.58958862253, "cumulative_tps": 68018.48757833378, "world_size": 1, "run": "base64"}
+{"step": 90, "loss": 5.065634727478027, "interval_tps": 66658.08671789696, "cumulative_tps": 67845.40851795825, "world_size": 1, "run": "base64"}
+{"step": 100, "loss": 5.043574810028076, "interval_tps": 70370.63373473573, "cumulative_tps": 68117.00346176418, "world_size": 1, "run": "base64"}
+{"step": 110, "loss": 4.969690322875977, "interval_tps": 68434.73576635352, "cumulative_tps": 68148.64386400592, "world_size": 1, "run": "base64"}
+{"step": 120, "loss": 4.909018039703369, "interval_tps": 71548.84051660488, "cumulative_tps": 68444.34043811809, "world_size": 1, "run": "base64"}
+{"step": 130, "loss": 4.860901355743408, "interval_tps": 69690.94142702997, "cumulative_tps": 68546.51794175406, "world_size": 1, "run": "base64"}
+{"step": 140, "loss": 4.816936492919922, "interval_tps": 71060.59146766258, "cumulative_tps": 68733.57527536391, "world_size": 1, "run": "base64"}
+{"step": 150, "loss": 4.768024921417236, "interval_tps": 69544.93886658135, "cumulative_tps": 68790.90144845423, "world_size": 1, "run": "base64"}
+{"step": 160, "loss": 4.730292320251465, "interval_tps": 56022.76653011506, "cumulative_tps": 67761.33680985893, "world_size": 1, "run": "base64"}
+{"step": 170, "loss": 4.674787998199463, "interval_tps": 61628.75539751756, "cumulative_tps": 67342.51501436188, "world_size": 1, "run": "base64"}
+{"step": 180, "loss": 4.647265911102295, "interval_tps": 69351.0669395601, "cumulative_tps": 67457.43904385557, "world_size": 1, "run": "base64"}
+{"step": 190, "loss": 4.599915504455566, "interval_tps": 75465.70730895297, "cumulative_tps": 67857.48901741703, "world_size": 1, "run": "base64"}
+{"step": 200, "loss": 4.564486980438232, "interval_tps": 70408.90906657706, "cumulative_tps": 67987.15546673643, "world_size": 1, "run": "base64"}

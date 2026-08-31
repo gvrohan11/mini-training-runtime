@@ -1,0 +1,5 @@
+{"step": 10, "loss": 5.627041339874268, "interval_tps": NaN, "cumulative_tps": NaN, "world_size": 2, "run": "part1_2r"}
+{"step": 20, "loss": 5.526796817779541, "interval_tps": 23988.4157549369, "cumulative_tps": 23988.4157549369, "world_size": 2, "run": "part1_2r"}
+{"step": 30, "loss": 5.461841583251953, "interval_tps": 23230.22266966367, "cumulative_tps": 23603.2320317532, "world_size": 2, "run": "part1_2r"}
+{"step": 40, "loss": 5.391870021820068, "interval_tps": 23010.20502037456, "cumulative_tps": 23402.188912864203, "world_size": 2, "run": "part1_2r"}
+{"step": 50, "loss": 5.328517913818359, "interval_tps": 23834.2039003182, "cumulative_tps": 23508.71773210409, "world_size": 2, "run": "part1_2r"}
