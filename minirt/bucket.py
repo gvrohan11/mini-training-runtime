@@ -3,9 +3,10 @@ import torch.distributed as dist
 
 
 class GradientBucketer:
-    def __init__(self, params, bucket_mb=25):
+    def __init__(self, params, bucket_mb=25, comm_dtype=None):
         self.bucket_bytes = int(bucket_mb * 1024 * 1024)
         self.params = list(params)
+        self.comm_dtype = comm_dtype
         self.buckets = self._build_buckets()
         self.pending = [len(bucket) for bucket in self.buckets]
         self.inflight = []
@@ -45,6 +46,9 @@ class GradientBucketer:
         grads = [p.grad for p in bucket]
 
         flat = torch._utils._flatten_dense_tensors(grads)
+        if self.comm_dtype is not None:
+            flat = flat.to(self.comm_dtype)
+        print(f"[bucket {bucket_idx}] flat.dtype = {flat.dtype}")  # temporary
         handle = dist.all_reduce(flat, async_op=True)
         self.inflight.append((handle, flat, grads))
 
@@ -69,6 +73,8 @@ class GradientBucketer:
 
             grads = [p.grad for p in bucket_params]
             flat = torch._utils._flatten_dense_tensors(grads)
+            if self.comm_dtype is not None:
+                flat = flat.to(self.comm_dtype)
 
             if dist.is_initialized():
                 dist.all_reduce(flat)

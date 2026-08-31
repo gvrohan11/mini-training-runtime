@@ -42,6 +42,7 @@ def main():
     p.add_argument("--warmup-steps", type=int, default=10)
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--dtype", default="fp32", choices=["fp32", "bf16"])
+    p.add_argument("--comm-dtype", default="fp32", choices=["fp32", "bf16"])
     p.add_argument("--bucket-mb", type=int, default=25)
     p.add_argument("--checkpoint-every", type=int, default=0)
     p.add_argument("--checkpoint-dir", default="runs")
@@ -66,7 +67,8 @@ def main():
         dist.broadcast(param.data, src=0)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    bucketer = GradientBucketer(model.parameters(), bucket_mb=args.bucket_mb)
+    comm_dtype = None if args.comm_dtype == "fp32" else torch.bfloat16
+    bucketer = GradientBucketer(model.parameters(), bucket_mb=args.bucket_mb, comm_dtype=comm_dtype)
     bucketer.register_hooks()
     log = JsonlLogger(f"runs/{args.run_name}.jsonl") if is_main else None
 
