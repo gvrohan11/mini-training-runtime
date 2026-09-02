@@ -43,6 +43,7 @@ def main():
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--dtype", default="fp32", choices=["fp32", "bf16"])
     p.add_argument("--comm-dtype", default="fp32", choices=["fp32", "bf16"])
+    p.add_argument("--zero-stage", type=int, default=0, choices=[0, 1])
     p.add_argument("--bucket-mb", type=int, default=25)
     p.add_argument("--checkpoint-every", type=int, default=0)
     p.add_argument("--checkpoint-dir", default="runs")
@@ -66,7 +67,13 @@ def main():
     for param in model.parameters():
         dist.broadcast(param.data, src=0)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    if args.zero_stage == 1:
+        from minirt.zero import ZeroOptimizer
+
+        opt = ZeroOptimizer(model.parameters(), lambda params: torch.optim.AdamW(params, lr=args.lr), rank=rank, world_size=world_size)
+    else:
+        opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+
     comm_dtype = None if args.comm_dtype == "fp32" else torch.bfloat16
     bucketer = GradientBucketer(model.parameters(), bucket_mb=args.bucket_mb, comm_dtype=comm_dtype)
     bucketer.register_hooks()
