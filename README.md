@@ -77,6 +77,7 @@ parameters and train in a couple of minutes on CPU.
 | M5 | Compute/comm overlap | done |
 | M6 | Deterministic checkpoint/resume | done |
 | M7 | Profiling pass + benchmark table | done |
+| M8 | bf16 gradient reduction | done |
 
 
 ## M0 - Single-process baseline
@@ -525,6 +526,58 @@ Gradients are all-reduced in **fp32** (`AllReduce_Sum_f32`) even though the
 forward pass runs in bf16 - autocast keeps master weights and gradients in full
 precision. Communication therefore moves twice the bytes a bf16 reduction
 would. Reducing in bf16, or compressing gradients, is unexplored here.
+
+## M8 - bf16 gradient reduction
+
+The M7 trace showed `ncclDevKernel_AllReduce_Sum_f32` - gradients were being
+reduced in fp32 even though the forward pass ran in bf16. Autocast keeps master
+weights and gradients in full precision, so the collective was moving twice the
+bytes it needed to. `--comm-dtype bf16` casts each flattened bucket to bf16
+before the all-reduce; the copy back into `.grad` restores fp32 implicitly.
+
+### Result: no throughput change
+
+Measured on 2x H100, batch 64/rank, 300 steps:
+
+| Gradient reduction | Throughput |
+|---|---|
+| fp32 | 969,226 tok/s |
+| bf16 | 964,688 tok/s |
+
+Halving communication volume made throughput 0.5% *worse* - within noise, and
+in the wrong direction.
+
+This is the expected outcome given M7. The trace had already shown the
+all-reduce running on a separate stream, fully hidden inside the backward pass.
+An operation that is not on the critical path cannot be made faster by
+shrinking it. What the change does add is one cast kernel per bucket per step -
+16 extra launches - which is where the 0.5% goes.
+
+### The collective did shrink
+
+![bf16 all-reduce](runs/bf16_allreduce.png)
+
+The kernel is now `ncclDevKernel_AllReduce_Sum_bf16_RING_LL` at 128.9 us,
+against `..._Sum_f32_RING_LL` at 147.5 us in the M7 trace. The change reached
+NCCL and is doing what it claims.
+
+Two caveats on that comparison. The traces differ in rank count (2 vs 4), so it
+is suggestive rather than controlled. And 13% is far short of the ~50% that
+halving payload would predict - at roughly 5MB per bucket the collective is
+latency-bound, not bandwidth-bound, so fixed ring-traversal and launch costs
+dominate the transfer time. That is consistent with the throughput result.
+
+### Convergence
+
+Loss tracks fp32 to 3-4 decimals across 300 steps (4.7065 / 4.7065 at step 50;
+0.8025 / 0.8067 at step 300). Reduced-precision gradient reduction does not
+measurably affect convergence at this scale.
+
+### What this establishes
+
+The optimization is real, correct, and useless here - and the profiler said so
+before the benchmark did. Communication is not the bottleneck in this
+configuration; compute is. bf16 reduction
 
 ## Setup
 
