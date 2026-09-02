@@ -70,9 +70,17 @@ class ZeroOptimizer:
         if not dist.is_initialized():
             return
 
-        for p in self.params:
-            owner = self.param_to_owner[id(p)]
-            dist.broadcast(p.data, src=owner)
+        for owner in range(self.world_size):
+            shard = self.shards[owner]
+            if not shard:
+                continue
+
+            flat = torch._utils._flatten_dense_tensors([p.data for p in shard])
+            dist.broadcast(flat, src=owner)
+
+            unflat = torch._utils._unflatten_dense_tensors(flat, [p.data for p in shard])
+            for p, u in zip(shard, unflat):
+                p.data.copy_(u)
 
     def step(self, closure=None):
         if closure is None:

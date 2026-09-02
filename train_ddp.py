@@ -161,6 +161,15 @@ def main():
                 if args.checkpoint_every:
                     ckpt_path = os.path.join(args.checkpoint_dir, f"{args.run_name}.ckpt")
                     save(ckpt_path, model, opt, batcher, args.steps, args)
+
+            peak_mem = None
+            if dev.startswith("cuda"):
+                peak_mem = torch.cuda.max_memory_allocated() / 1024**3
+                if is_main:
+                    print(f"peak memory: {peak_mem:.2f} GiB")
+                    if log is not None:
+                        log.log(step=args.steps, loss=float("nan"), interval_tps=float("nan"), cumulative_tps=float("nan"),
+                                world_size=world_size, run=args.run_name, peak_memory_gib=peak_mem, type="summary")
     finally:
         dist.destroy_process_group()
 
