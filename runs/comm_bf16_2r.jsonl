@@ -1,0 +1,12 @@
+{"step": 50, "loss": 4.706473350524902, "interval_tps": 968047.6522786301, "cumulative_tps": 968047.6522786301, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 100, "loss": 4.472590923309326, "interval_tps": 966462.6888094639, "cumulative_tps": 967166.4758041289, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 150, "loss": 4.278000354766846, "interval_tps": 965173.9401715606, "cumulative_tps": 966453.9122157821, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 200, "loss": 3.6968493461608887, "interval_tps": 964428.9849949515, "cumulative_tps": 965920.2126838787, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 250, "loss": 2.3713369369506836, "interval_tps": 962936.4963801877, "cumulative_tps": 965297.0812844734, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 300, "loss": 0.8907982110977173, "interval_tps": 962952.6159372824, "cumulative_tps": 964892.0490062642, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 50, "loss": 4.706526756286621, "interval_tps": 968585.1791188193, "cumulative_tps": 968585.1791188193, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 100, "loss": 4.472531318664551, "interval_tps": 966456.3789955206, "cumulative_tps": 967401.3560015395, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 150, "loss": 4.278079986572266, "interval_tps": 964662.1844526486, "cumulative_tps": 966421.2965116138, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 200, "loss": 3.707019805908203, "interval_tps": 963958.702854841, "cumulative_tps": 965772.0264865786, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 250, "loss": 2.387127637863159, "interval_tps": 963479.2819460933, "cumulative_tps": 965293.4719699568, "world_size": 2, "run": "comm_bf16_2r"}
+{"step": 300, "loss": 0.8067458868026733, "interval_tps": 961838.2968192935, "cumulative_tps": 964695.982193198, "world_size": 2, "run": "comm_bf16_2r"}

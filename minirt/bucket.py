@@ -48,7 +48,6 @@ class GradientBucketer:
         flat = torch._utils._flatten_dense_tensors(grads)
         if self.comm_dtype is not None:
             flat = flat.to(self.comm_dtype)
-        print(f"[bucket {bucket_idx}] flat.dtype = {flat.dtype}")  # temporary
         handle = dist.all_reduce(flat, async_op=True)
         self.inflight.append((handle, flat, grads))
 

@@ -1,0 +1,3 @@
+{"step": 10, "loss": 5.581108093261719, "interval_tps": NaN, "cumulative_tps": NaN, "world_size": 2, "run": "prof_bf16comm"}
+{"step": 20, "loss": 5.165701866149902, "interval_tps": 971238.2729863519, "cumulative_tps": 971238.2729863519, "world_size": 2, "run": "prof_bf16comm"}
+{"step": 30, "loss": 4.945901870727539, "interval_tps": 971068.6803602313, "cumulative_tps": 971153.4692692974, "world_size": 2, "run": "prof_bf16comm"}
