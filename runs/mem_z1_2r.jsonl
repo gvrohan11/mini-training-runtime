@@ -1,0 +1,3 @@
+{"step": 50, "loss": 4.807277679443359, "interval_tps": 185707.1030016908, "cumulative_tps": 185707.1030016908, "world_size": 2, "run": "mem_z1_2r"}
+{"step": 100, "loss": 4.566442966461182, "interval_tps": 185438.8280367302, "cumulative_tps": 185557.96560076415, "world_size": 2, "run": "mem_z1_2r"}
+{"step": 100, "loss": NaN, "interval_tps": NaN, "cumulative_tps": NaN, "world_size": 2, "run": "mem_z1_2r", "peak_memory_gib": 6.374649524688721, "type": "summary"}
