@@ -78,6 +78,7 @@ parameters and train in a couple of minutes on CPU.
 | M6 | Deterministic checkpoint/resume | done |
 | M7 | Profiling pass + benchmark table | done |
 | M8 | bf16 gradient reduction | done |
+| M9 | ZeRO-1 optimizer state sharding | done |
 
 
 ## M0 - Single-process baseline
@@ -578,6 +579,102 @@ measurably affect convergence at this scale.
 The optimization is real, correct, and useless here - and the profiler said so
 before the benchmark did. Communication is not the bottleneck in this
 configuration; compute is. bf16 reduction
+
+## M9 - ZeRO-1 optimizer state sharding
+
+Under plain DDP every rank holds a full copy of AdamW's state - first and second
+moments, fp32, one pair per parameter - and computes an identical optimizer
+update. For an 86M-parameter model that is ~660 MiB replicated on every GPU to
+produce the same answer N times.
+
+ZeRO-1 partitions it. Parameters are split into `world_size` disjoint shards;
+each rank builds its optimizer over its own shard only, steps just those
+parameters, and then the updated weights are broadcast from their owner so every
+rank ends the step with an identical model.
+
+### Implementation
+
+**Partitioning** is greedy by element count rather than parameter count - the
+embedding and output head dwarf the LayerNorms, so an even split of *tensors*
+would be a badly uneven split of *state*. Ties break by index, making the
+partition a pure function of parameter order and shape, and therefore identical
+on every rank without any communication.
+
+**Gradient reduction is unchanged.** All ranks still all-reduce every gradient;
+Stage 1 shards only optimizer state. (Sharding gradients via reduce-scatter is
+Stage 2.)
+
+**Parameter sync** after the local step is bucketed, for the same reason M4
+bucketed gradients. The naive version issues one broadcast per parameter - ~50
+collectives per step:
+
+| Parameter sync | Throughput (2 ranks, CPU) |
+|---|---|
+| Per-parameter broadcast | 37.9k tok/s |
+| Bucketed by owner | 46.2k tok/s |
+
+22% from collapsing ~50 collectives into 2. Every rank flattens each owner's
+shard unconditionally - the receiving buffers hold stale values, but the shapes
+must match for the broadcast to land - then all ranks copy back.
+
+Two invariants this depends on, both worth stating because violating either
+deadlocks rather than errors:
+
+- All ranks iterate owners in the same fixed order.
+- `zero_grad` must clear gradients for *all* parameters, not just the local
+  shard. The wrapped optimizer only knows about its own shard, so delegating
+  blindly leaves ~`(N-1)/N` of the gradients accumulating across steps - and
+  the bucketer would then all-reduce stale values.
+
+### Correctness
+
+Losses identical to four decimals against the plain-DDP baseline, on CPU/gloo
+and on GPU/NCCL. Relocating where optimizer state lives does not change the
+math.
+
+### Memory
+
+Measured on 2x A6000 48GB, 86M parameters, 100 steps. (Throughput figures
+elsewhere in this README are 4x H100; this table is different hardware.)
+
+| Batch/rank | DDP peak | ZeRO-1 peak | Saved | % of peak |
+|---|---|---|---|---|
+| 32 | 6.70 GiB | 6.37 GiB | 0.33 GiB | 4.9% |
+| 4 | 2.16 GiB | 1.82 GiB | 0.34 GiB | **15.7%** |
+
+**The absolute saving is constant; the percentage is not.** 0.33 GiB is half of
+AdamW's ~660 MiB of fp32 moments, which is exactly `state x (1 - 1/N)` at
+`N = 2`. Cutting the batch 8x shrank activations proportionally while optimizer
+state stayed fixed, so the same saving went from 5% of peak to 16%.
+
+That ratio is the whole story of when ZeRO-1 is worth it. It shards a quantity
+that scales with **model size**, against a memory budget usually dominated by
+activations, which scale with **batch size and sequence length**. At batch 32
+here, activations are ~90% of peak and ZeRO-1 barely registers. The technique
+earns its cost when the model is large relative to the batch - which is the
+regime frontier training actually operates in, and the reason the paper targets
+billion-parameter models rather than 86M ones.
+
+### Cost
+
+| Config | Throughput (2x A6000) |
+|---|---|
+| DDP | 203k tok/s |
+| ZeRO-1 | 186k tok/s |
+
+8%, paid for the parameter broadcast that DDP does not need. At this model size
+that is a bad trade; at a size where optimizer state dominates memory, it buys
+the ability to train at all.
+
+### Known gaps
+
+- Stage 2 (gradient sharding via reduce-scatter) and Stage 3 (parameter
+  sharding) are not implemented.
+- Checkpointing under ZeRO is untested: each rank holds a different shard of
+  optimizer state, so the M6 bit-exactness test does not apply as written.
+  Gathering shards to rank 0 at save time would make checkpoints
+  world-size-independent.
+- The parameter broadcast is not overlapped with anything.
 
 ## Setup
 
